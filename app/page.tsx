@@ -7,6 +7,7 @@ import { LiveMarketsPanel } from "@/components/LiveMarketsPanel";
 import { MarketSentimentPanel } from "@/components/MarketSentimentPanel";
 import { LiveTradingPanel } from "@/components/LiveTradingPanel";
 import { AIInsightsPanel } from "@/components/AIInsightsPanel";
+import { TradeSetupPanel } from "@/components/TradeSetupPanel";
 import { VoiceCommandBar } from "@/components/VoiceCommandBar";
 import { StatsBar } from "@/components/StatsBar";
 import type { InstrumentQuote } from "@/lib/market-data/types";
@@ -234,6 +235,7 @@ export default function Page() {
 
           <div className="flex flex-col gap-4">
             <LiveTradingPanel gold={goldSummary?.gold ?? null} />
+            <TradeSetupPanel />
             <AIInsightsPanel judge={goldSummary?.judge ?? null} connected={goldSummary?.connected ?? false} />
           </div>
         </div>
