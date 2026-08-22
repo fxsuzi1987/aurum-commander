@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { runChatTurn, runMemoryExtraction, type SimpleMessage } from "./llm";
 import { loadHistory, loadMemory, pushMessage, pushMemory } from "./store";
-import { checkGoldDeskStatus, hasGoldDeskUrl } from "./specialists";
+import { checkGoldDeskStatus, hasGoldDeskUrl, getTradeSetupText, hasRealTradeSetupData } from "./specialists";
 import { HISTORY_WINDOW, MEMORY_WINDOW } from "./config";
 import type { ChatMessage } from "./types";
 
@@ -15,10 +15,35 @@ const TOOLS: Anthropic.Tool[] = [
       "exchange connection and this tool can never place, modify, or cancel a real trade.",
     input_schema: { type: "object", properties: {} },
   },
+  {
+    name: "get_trade_setup",
+    description:
+      "Get a rule-based BUY/SELL trade setup with entry, stop loss, and take profit for gold (XAUUSD) or a US " +
+      "stock index (S&P 500, NASDAQ, Dow) — computed deterministically from real price data (EMA trend, ATR " +
+      "volatility, recent swing structure), never invented. Can return NO_SETUP if there's no clean trend right " +
+      "now. This is technical analysis, not financial advice, and requires real market data to be connected.",
+    input_schema: {
+      type: "object",
+      properties: {
+        symbol: {
+          type: "string",
+          description: "Which market: GOLD, S&P500, NASDAQ, or DOW.",
+          enum: ["GOLD", "S&P500", "NASDAQ", "DOW"],
+        },
+      },
+      required: ["symbol"],
+    },
+  },
 ];
 
-async function runTool(name: string): Promise<string> {
+async function runTool(name: string, input: unknown): Promise<string> {
   if (name === "check_gold_desk_status") return checkGoldDeskStatus();
+  if (name === "get_trade_setup") {
+    const symbol = input && typeof input === "object" && "symbol" in input && typeof (input as { symbol: unknown }).symbol === "string"
+      ? (input as { symbol: string }).symbol
+      : "GOLD";
+    return getTradeSetupText(symbol);
+  }
   return `Unknown tool: ${name}`;
 }
 
@@ -37,11 +62,15 @@ function buildSystemPrompt(memoryLines: string[]): string {
       "reports you need, and give ONE clear answer or next action — not a menu of options unless he " +
       "asked for options.",
     "",
-    "Specialists: right now you have exactly one real specialist connected — the Obsidian Desk gold " +
-      "paper-trading pipeline, reachable via the check_gold_desk_status tool. Every other specialist " +
-      "described in Sujan's blueprint (Atlas/Shopify, Content Studio, Nexa, Paycheck God, the Learning " +
-      "agents, and the rest of the Trading Council) is not built yet. If Sujan asks about one of those, " +
-      "say plainly that it isn't wired up yet rather than pretending to check something you can't.",
+    "Specialists: you have the Obsidian Desk gold paper-trading pipeline (check_gold_desk_status) and, " +
+      "when real market data is connected, a rule-based trade-setup engine for gold and US indices " +
+      "(get_trade_setup) — it computes BUY/SELL/NO_SETUP with entry/stop-loss/take-profit deterministically " +
+      "from real price data (EMA trend, ATR volatility, swing structure); you never invent or adjust those " +
+      "numbers yourself, and you always pass along its NO_SETUP / not-connected / error responses honestly " +
+      "instead of guessing a plausible-sounding trade. Every other specialist described in Sujan's blueprint " +
+      "(Atlas/Shopify, Content Studio, Nexa, Paycheck God, the Learning agents, and the rest of the Trading " +
+      "Council) is not built yet. If Sujan asks about one of those, say plainly that it isn't wired up yet " +
+      "rather than pretending to check something you can't.",
     "",
     "Hard rules, no exceptions:",
     "- You can analyze, draft, explain, and recommend. You cannot execute anything real: no trades, no " +
@@ -77,7 +106,11 @@ export async function runAurumTurn(userText: string): Promise<AurumTurnResult> {
 
   const simpleHistory: SimpleMessage[] = [...history, userMsg].map((m) => ({ role: m.role, content: m.content }));
   const system = buildSystemPrompt(memory.map((m) => m.text));
-  const tools = hasGoldDeskUrl() ? TOOLS : [];
+  const tools = TOOLS.filter((t) => {
+    if (t.name === "check_gold_desk_status") return hasGoldDeskUrl();
+    if (t.name === "get_trade_setup") return hasRealTradeSetupData();
+    return true;
+  });
 
   const { text, toolsUsed } = await runChatTurn(system, simpleHistory, tools, runTool);
 
