@@ -10,6 +10,7 @@ import { AIInsightsPanel } from "@/components/AIInsightsPanel";
 import { TradeSetupPanel } from "@/components/TradeSetupPanel";
 import { VoiceCommandBar } from "@/components/VoiceCommandBar";
 import { StatsBar } from "@/components/StatsBar";
+import { SideMenu, type ConnectionStatus } from "@/components/SideMenu";
 import type { InstrumentQuote } from "@/lib/market-data/types";
 import type { TradingAgentState } from "@/lib/strategy/types";
 
@@ -22,7 +23,13 @@ interface ChatMessage {
 
 interface HistoryResponse {
   history: ChatMessage[];
-  env: { hasAnthropicKey: boolean; hasGoldDeskUrl: boolean; persistentStore: boolean };
+  env: {
+    hasAnthropicKey: boolean;
+    hasGoldDeskUrl: boolean;
+    persistentStore: boolean;
+    hasRealMarketData: boolean;
+    webhookConfigured: boolean;
+  };
 }
 
 interface GoldDeskSummary {
@@ -66,6 +73,8 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [lastResponseMs, setLastResponseMs] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -128,39 +137,63 @@ export default function Page() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, sending]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || sending) return;
-    setInput("");
-    setError(null);
-    const optimistic: ChatMessage = { id: `local-${Date.now()}`, role: "user", content: text, t: new Date().toISOString() };
-    setMessages((m) => [...m, optimistic]);
-    setSending(true);
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setError(data.error);
-        setMessages((m) => m.filter((msg) => msg.id !== optimistic.id));
-        setInput(text);
-      } else {
+  // Core send path — shared by the main composer, the top-bar command
+  // input, quick actions, and "view full analysis": one real call to
+  // /api/chat, one place that tracks how long it actually took. Returns
+  // whether it succeeded so callers can decide what to do with their own
+  // input state on failure.
+  const sendMessage = useCallback(
+    async (text: string): Promise<boolean> => {
+      const trimmed = text.trim();
+      if (!trimmed || sending) return false;
+      setError(null);
+      const optimistic: ChatMessage = { id: `local-${Date.now()}`, role: "user", content: trimmed, t: new Date().toISOString() };
+      setMessages((m) => [...m, optimistic]);
+      setSending(true);
+      const startedAt = Date.now();
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: trimmed }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          setError(data.error);
+          setMessages((m) => m.filter((msg) => msg.id !== optimistic.id));
+          return false;
+        }
+        setLastResponseMs(Date.now() - startedAt);
         setMessages((m) => [
           ...m,
           { id: `local-reply-${Date.now()}`, role: "assistant", content: data.reply, t: new Date().toISOString() },
         ]);
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setMessages((m) => m.filter((msg) => msg.id !== optimistic.id));
+        return false;
+      } finally {
+        setSending(false);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setMessages((m) => m.filter((msg) => msg.id !== optimistic.id));
-      setInput(text);
-    } finally {
-      setSending(false);
-    }
-  }, [input, sending]);
+    },
+    [sending]
+  );
+
+  const send = useCallback(async () => {
+    const text = input;
+    if (!text.trim() || sending) return;
+    setInput("");
+    const ok = await sendMessage(text);
+    if (!ok) setInput(text);
+  }, [input, sending, sendMessage]);
+
+  const sendQuick = useCallback(
+    (text: string) => {
+      sendMessage(text);
+    },
+    [sendMessage]
+  );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -172,9 +205,19 @@ export default function Page() {
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   const greeting = lastAssistant ? lastAssistant.content.slice(0, 90) + (lastAssistant.content.length > 90 ? "…" : "") : "Type below to talk to Aurum — voice arrives once this dashboard is live.";
 
+  const connections: ConnectionStatus[] = [
+    { label: "Claude / Anthropic", connected: env?.hasAnthropicKey ?? false, detail: "Powers every Aurum chat reply." },
+    { label: "Persistent Memory", connected: env?.persistentStore ?? false, detail: "Redis-backed chat history and memory — without it, memory resets on cold start." },
+    { label: "Gold Desk", connected: env?.hasGoldDeskUrl ?? false, detail: "Obsidian Desk paper-trading pipeline for live gold price and judge calls." },
+    { label: "Real Market Data", connected: env?.hasRealMarketData ?? false, detail: "Twelve Data — powers the Trade Setup engine for gold and US indices." },
+    { label: "TradingView Webhook", connected: env?.webhookConfigured ?? false, detail: "Receives alerts from your own TradingView strategy, if you've set one up." },
+  ];
+  const connectedCount = connections.filter((c) => c.connected).length;
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <TopHeader />
+      <TopHeader onMenuClick={() => setMenuOpen(true)} onSubmit={sendQuick} sending={sending} />
+      <SideMenu open={menuOpen} onClose={() => setMenuOpen(false)} connections={connections} />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         <div className="mx-auto grid max-w-[1500px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)_minmax(0,340px)]">
@@ -236,7 +279,7 @@ export default function Page() {
           <div className="flex flex-col gap-4">
             <LiveTradingPanel gold={goldSummary?.gold ?? null} />
             <TradeSetupPanel />
-            <AIInsightsPanel judge={goldSummary?.judge ?? null} connected={goldSummary?.connected ?? false} />
+            <AIInsightsPanel judge={goldSummary?.judge ?? null} connected={goldSummary?.connected ?? false} onAskMore={sendQuick} />
           </div>
         </div>
       </div>
@@ -247,6 +290,10 @@ export default function Page() {
             account={brokerAccount?.account ?? null}
             positionCount={brokerAccount?.positions.length ?? 0}
             onAskAurum={() => composerRef.current?.focus()}
+            onQuickAction={sendQuick}
+            connectedCount={connectedCount}
+            totalSources={connections.length}
+            lastResponseMs={lastResponseMs}
           />
         </div>
       </div>
