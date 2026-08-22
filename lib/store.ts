@@ -10,8 +10,13 @@ const MAX_MEMORY = 300;
 let redis: Redis | null = null;
 function getRedis(): Redis | null {
   if (redis) return redis;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  // Accept either naming convention: UPSTASH_REDIS_REST_* (what Upstash's
+  // own docs use, and what this app's .env.example documents) or
+  // KV_REST_API_* (what Vercel's own "Upstash for Redis" marketplace
+  // integration names them by default when connected through the Vercel
+  // dashboard). Same REST protocol either way.
+  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
   if (!url || !token) return null;
   redis = new Redis({ url, token });
   return redis;
