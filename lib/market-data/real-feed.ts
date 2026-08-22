@@ -56,6 +56,61 @@ export async function fetchRealQuote(symbol: RealSymbol): Promise<RealFetchResul
   }
 }
 
+export interface RealQuoteSummary {
+  price: number;
+  change: number;
+  changePct: number;
+}
+
+/**
+ * Batched quote fetch for the Live Markets overview card — one Twelve Data
+ * request covering all requested symbols (comma-separated ticker list),
+ * not one request per symbol. This keeps the 20s-poll overview panel well
+ * inside the free-tier rate limit even though it now shows 3 real
+ * instruments. Returns a map keyed by RealSymbol; a symbol whose data
+ * Twelve Data didn't return, or returned unparseable, is simply absent
+ * from the map — callers must treat a missing entry as "not live right
+ * now" and fall back to a labeled demo row, never fabricate one.
+ */
+export async function fetchRealQuotesBatch(symbols: RealSymbol[]): Promise<Partial<Record<RealSymbol, RealQuoteSummary>>> {
+  const key = process.env.TWELVE_DATA_API_KEY;
+  const out: Partial<Record<RealSymbol, RealQuoteSummary>> = {};
+  if (!key || symbols.length === 0) return out;
+
+  const tickerToSymbol = new Map<string, RealSymbol>(symbols.map((s) => [TICKERS[s].ticker, s]));
+  const tickerList = symbols.map((s) => TICKERS[s].ticker).join(",");
+  const url = `${BASE}/quote?symbol=${encodeURIComponent(tickerList)}&apikey=${key}`;
+
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || data?.status === "error") return out;
+
+    // Twelve Data returns a single quote object when one symbol is
+    // requested, and an object keyed by ticker when multiple are — normalize
+    // to the multi-symbol shape so this works either way.
+    const bySymbol: Record<string, unknown> = symbols.length === 1 ? { [TICKERS[symbols[0]].ticker]: data } : data;
+
+    for (const [ticker, entry] of Object.entries(bySymbol)) {
+      const realSymbol = tickerToSymbol.get(ticker);
+      if (!realSymbol || !entry || typeof entry !== "object") continue;
+      const e = entry as Record<string, unknown>;
+      const price = Number(e.close);
+      const change = Number(e.change);
+      const changePct = Number(e.percent_change);
+      if (!Number.isFinite(price)) continue; // no usable price — leave this symbol out, never invent one
+      out[realSymbol] = {
+        price,
+        change: Number.isFinite(change) ? change : 0,
+        changePct: Number.isFinite(changePct) ? changePct : 0,
+      };
+    }
+    return out;
+  } catch {
+    return out; // network/parse failure — caller falls back to demo rows
+  }
+}
+
 export async function fetchRealCandles(
   symbol: RealSymbol,
   interval: "1h" | "4h" | "1day" = "1h",
