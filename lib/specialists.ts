@@ -7,6 +7,8 @@
 // fixed jobs" principle.
 
 import type { GoldDeskSummary } from "./types";
+import { fetchRealCandles, fetchRealQuote, hasRealMarketData, realSymbolLabel, type RealSymbol } from "./market-data/real-feed";
+import { computeTradeSetup } from "./strategy/setup-engine";
 
 export function hasGoldDeskUrl(): boolean {
   return Boolean(process.env.OBSIDIAN_DESK_URL);
@@ -160,4 +162,74 @@ export async function fetchGoldDeskSummary(): Promise<GoldDeskSummary> {
       : null,
     cycleError: state.error ?? null,
   };
+}
+
+export function hasRealTradeSetupData(): boolean {
+  return hasRealMarketData();
+}
+
+const TRADE_SETUP_SYMBOLS: Record<string, RealSymbol> = {
+  GOLD: "XAUUSD",
+  XAUUSD: "XAUUSD",
+  XAU: "XAUUSD",
+  "S&P500": "SPX",
+  SP500: "SPX",
+  SPX: "SPX",
+  NASDAQ: "IXIC",
+  IXIC: "IXIC",
+  DOW: "DJI",
+  DOWJONES: "DJI",
+  DJI: "DJI",
+};
+
+/**
+ * Rule-based buy/sell setup with entry/SL/TP for gold or a US index, for
+ * the chat agent. Every number comes straight out of computeTradeSetup()
+ * on real candles — the LLM only gets to phrase the answer, never invent
+ * or adjust a level. Returns a plain-language answer plus an explicit
+ * "not connected" / error message when real data isn't available, so the
+ * model can never fill the gap with a plausible-sounding guess.
+ */
+export async function getTradeSetupText(symbolInput: string): Promise<string> {
+  const key = symbolInput.trim().toUpperCase().replace(/[\s/]/g, "");
+  const symbol = TRADE_SETUP_SYMBOLS[key] ?? "XAUUSD";
+  const displayName = realSymbolLabel(symbol);
+
+  if (!hasRealMarketData()) {
+    return `Real market data isn't connected yet, so I can't compute a live setup for ${displayName}. Add TWELVE_DATA_API_KEY (free at twelvedata.com) to turn this on.`;
+  }
+
+  const candlesResult = await fetchRealCandles(symbol, "1h", 120);
+  if (!candlesResult.ok || !candlesResult.data) {
+    return `Couldn't get real candles for ${displayName}: ${candlesResult.error ?? "unknown error"}.`;
+  }
+
+  let currentPrice: number | null = null;
+  let priceError: string | null = null;
+  if (symbol === "XAUUSD") {
+    const goldSummary = await fetchGoldDeskSummary();
+    currentPrice = goldSummary.gold?.price ?? null;
+    if (currentPrice === null) priceError = goldSummary.error ?? "Gold desk has no current price.";
+  } else {
+    const quoteResult = await fetchRealQuote(symbol);
+    currentPrice = quoteResult.data?.price ?? null;
+    if (!quoteResult.ok) priceError = quoteResult.error;
+  }
+
+  if (currentPrice === null) {
+    return `Couldn't get a current price for ${displayName}: ${priceError ?? "unknown error"}.`;
+  }
+
+  const setup = computeTradeSetup(candlesResult.data, currentPrice);
+
+  if (setup.side === "NO_SETUP") {
+    return `${displayName} at ${currentPrice.toFixed(2)}: no clean setup right now. ${setup.basis} This is technical analysis, not financial advice.`;
+  }
+
+  return [
+    `${displayName} — ${setup.side} setup at ${currentPrice.toFixed(2)}:`,
+    `Entry ${setup.entry}, Stop Loss ${setup.stopLoss}, Take Profit ${setup.takeProfit} (${setup.riskRewardRatio}:1 reward:risk).`,
+    setup.basis,
+    "This is rule-based technical analysis on real price data, not financial advice — I'm not a licensed advisor and this can be wrong.",
+  ].join(" ");
 }
