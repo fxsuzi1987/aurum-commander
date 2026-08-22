@@ -4,6 +4,7 @@ import { SESSION_ID } from "./config";
 
 const HISTORY_KEY = `aurum:${SESSION_ID}:history`; // list, newest first
 const MEMORY_KEY = `aurum:${SESSION_ID}:memory`; // list, newest first
+const TV_SIGNALS_KEY = `aurum:${SESSION_ID}:tv-signals`; // hash, symbol -> latest signal JSON
 const MAX_HISTORY = 200;
 const MAX_MEMORY = 300;
 
@@ -25,7 +26,42 @@ function getRedis(): Redis | null {
 // In-memory fallback so local `next dev` works before Upstash is configured.
 // Resets on every cold start in a real serverless deployment — set
 // UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN for real persistence.
-const mem: { history: ChatMessage[]; memory: MemoryEntry[] } = { history: [], memory: [] };
+const mem: { history: ChatMessage[]; memory: MemoryEntry[]; tvSignals: Record<string, TradingViewSignal> } = {
+  history: [],
+  memory: [],
+  tvSignals: {},
+};
+
+// A signal received from the user's own TradingView Pine Script alert
+// webhook (see app/api/webhooks/tradingview/route.ts). This is NOT
+// computed by Aurum — it's whatever the user's own TradingView
+// strategy/indicator sent. Stored and shown as-is, clearly attributed.
+export interface TradingViewSignal {
+  symbol: string;
+  side: string; // whatever TradingView sent, e.g. "BUY" / "SELL" / "LONG" / "SHORT"
+  price: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  message: string | null;
+  receivedAt: string; // ISO
+}
+
+export async function saveTradingViewSignal(signal: TradingViewSignal): Promise<void> {
+  const r = getRedis();
+  if (!r) {
+    mem.tvSignals[signal.symbol] = signal;
+    return;
+  }
+  await r.hset(TV_SIGNALS_KEY, { [signal.symbol]: JSON.stringify(signal) });
+}
+
+export async function loadTradingViewSignal(symbol: string): Promise<TradingViewSignal | null> {
+  const r = getRedis();
+  if (!r) return mem.tvSignals[symbol] ?? null;
+  const raw = await r.hget<string>(TV_SIGNALS_KEY, symbol);
+  if (!raw) return null;
+  return typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as TradingViewSignal);
+}
 
 export async function usingPersistentStore(): Promise<boolean> {
   return getRedis() !== null;
