@@ -1,6 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TopHeader } from "@/components/TopHeader";
+import { AurumCore } from "@/components/AurumCore";
+import { LiveMarketsPanel } from "@/components/LiveMarketsPanel";
+import { MarketSentimentPanel } from "@/components/MarketSentimentPanel";
+import { LiveTradingPanel } from "@/components/LiveTradingPanel";
+import { AIInsightsPanel } from "@/components/AIInsightsPanel";
+import { VoiceCommandBar } from "@/components/VoiceCommandBar";
+import { StatsBar } from "@/components/StatsBar";
+import type { InstrumentQuote } from "@/lib/market-data/types";
+import type { TradingAgentState } from "@/lib/strategy/types";
 
 interface ChatMessage {
   id: string;
@@ -26,183 +36,37 @@ interface GoldDeskSummary {
   cycleError: string | null;
 }
 
-// The six divisions from the blueprint's agent roster. Only Trading is
-// actually built — everything else stays visibly disabled rather than
-// showing placeholder content, per the no-fabricated-data rule.
-const DIVISIONS: { id: string; label: string; color: string; enabled: boolean }[] = [
-  { id: "trading", label: "Trading", color: "#d4af5a", enabled: true },
-  { id: "business", label: "Business", color: "#6fb7e8", enabled: false },
-  { id: "content", label: "Content", color: "#b58ce8", enabled: false },
-  { id: "money", label: "Money", color: "#6fe8a0", enabled: false },
-  { id: "files", label: "Files", color: "#6fb7e8", enabled: false },
-  { id: "learning", label: "Learning", color: "#d4af5a", enabled: false },
+interface BrokerAccountResponse {
+  account: { balance: number; equity: number; currency: string; brokerConnected: boolean };
+  positions: unknown[];
+  mode: string;
+}
+
+// All six modules stay "standby" honestly — none of the strategy/risk/
+// execution phases (spec phases 3-12) are built yet. Marking them "active"
+// would claim analysis this app isn't actually doing.
+const AGENTS: TradingAgentState[] = [
+  { id: "market-structure", label: "MARKET STRUCTURE", status: "standby", detail: "Not built yet — structure detection is a later phase." },
+  { id: "trend-engine", label: "TREND ENGINE", status: "standby", detail: "Not built yet — trend/momentum scoring is a later phase." },
+  { id: "risk-manager", label: "RISK MANAGER", status: "standby", detail: "Config defined, not yet enforced on any order." },
+  { id: "trade-executor", label: "TRADE EXECUTOR", status: "standby", detail: "Demo broker can place orders, but nothing triggers it automatically yet." },
+  { id: "news-watch", label: "NEWS WATCH", status: "standby", detail: "No economic calendar feed connected yet." },
+  { id: "position-manager", label: "POSITION MANAGER", status: "standby", detail: "Tracks demo positions once the executor opens any." },
 ];
 
-const GOLD_STATUS_POLL_MS = 20000;
-
-function Pill({ label, tone }: { label: string; tone: string }) {
-  return (
-    <span className={`pill pill-${tone}`}>
-      <span className="pill-dot" />
-      {label}
-    </span>
-  );
-}
-
-function AgentRail({ active, onSelect }: { active: string; onSelect: (id: string) => void }) {
-  return (
-    <div className="agent-rail">
-      {DIVISIONS.map((d) => (
-        <button
-          key={d.id}
-          className={`rail-item ${active === d.id ? "rail-active" : ""} ${!d.enabled ? "rail-disabled" : ""}`}
-          disabled={!d.enabled}
-          onClick={() => d.enabled && onSelect(d.id)}
-          title={d.enabled ? d.label : `${d.label} — not built yet`}
-        >
-          <span className="rail-icon" style={{ color: d.enabled || active === d.id ? d.color : undefined }} />
-          <span className="rail-label">{d.label}</span>
-          {!d.enabled && <span className="rail-badge">soon</span>}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function judgeCallClass(call: string): string {
-  const c = call.toUpperCase();
-  if (c.includes("BUY") || c === "LONG") return "judge-call-buy";
-  if (c.includes("SELL") || c === "SHORT") return "judge-call-sell";
-  return "judge-call-none";
-}
-
-function fmtPct(v: number | null): string {
-  return v === null ? "—" : `${Math.round(v * 100)}%`;
-}
-
-function fmtTime(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return iso;
-  }
-}
-
-function ConfluenceMeter({ label, value }: { label: string; value: number | null }) {
-  const pct = value === null ? 0 : Math.round(value * 100);
-  return (
-    <div className="meter-row">
-      <span className="meter-label">{label}</span>
-      <span className="meter-track">
-        <span className={`meter-fill ${value === null ? "meter-empty" : ""}`} style={{ width: `${pct}%` }} />
-      </span>
-      <span className="meter-value">{fmtPct(value)}</span>
-    </div>
-  );
-}
-
-function TradingPanels({ summary }: { summary: GoldDeskSummary | null }) {
-  if (!summary) {
-    return (
-      <div className="trading-col">
-        <div className="division-heading">TRADING DESK</div>
-        <div className="panel"><div className="panel-empty">Loading gold desk status…</div></div>
-      </div>
-    );
-  }
-
-  if (!summary.connected) {
-    return (
-      <div className="trading-col">
-        <div className="division-heading">TRADING DESK</div>
-        <div className="panel">
-          <div className="panel-title">GOLD DESK</div>
-          <div className="panel-empty panel-empty-error">{summary.error ?? "The gold desk isn't reachable."}</div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="trading-col">
-      <div className="division-heading">TRADING DESK</div>
-
-      <div className="panel">
-        <div className="panel-title">
-          XAUUSD SPOT
-          <span className="panel-title-glow">●</span>
-        </div>
-        {summary.gold ? (
-          <>
-            <div className="gold-price">
-              {summary.gold.price.toFixed(2)}
-              <span className="gold-price-currency">{summary.gold.currency}</span>
-            </div>
-            <div className="gold-price-meta">
-              {summary.gold.source} · {fmtTime(summary.gold.updatedAt)}
-            </div>
-          </>
-        ) : (
-          <div className="panel-empty">No price yet — the pipeline hasn&rsquo;t run a cycle.</div>
-        )}
-      </div>
-
-      <div className="panel">
-        <div className="panel-title">CONFLUENCE</div>
-        <ConfluenceMeter label="MACRO" value={summary.confluence.macro} />
-        <ConfluenceMeter label="TECHNICAL" value={summary.confluence.technical} />
-        <ConfluenceMeter label="NEWS" value={summary.confluence.news} />
-        <ConfluenceMeter label="RISK" value={summary.confluence.risk} />
-      </div>
-
-      <div className="panel">
-        <div className="panel-title">LATEST DECISION</div>
-        {summary.judge ? (
-          <>
-            <div className={`judge-call ${judgeCallClass(summary.judge.call)}`}>
-              {summary.judge.call}
-              <span className="judge-confidence">{fmtPct(summary.judge.confidence)}</span>
-            </div>
-            <div className="judge-reasoning">{summary.judge.reasoning}</div>
-            <div className="judge-cycle">
-              {summary.cycleId} · {fmtTime(summary.ranAt)}
-            </div>
-          </>
-        ) : (
-          <div className="panel-empty">No decision yet this cycle.</div>
-        )}
-        {summary.cycleError && <div className="panel-empty panel-empty-error" style={{ marginTop: 8 }}>{summary.cycleError}</div>}
-      </div>
-
-      {summary.portfolio && (
-        <div className="panel">
-          <div className="panel-title">PAPER PORTFOLIO</div>
-          <div className="gold-price" style={{ fontSize: 20 }}>
-            {summary.portfolio.equity.toFixed(2)}
-            <span className="gold-price-currency">USD</span>
-          </div>
-          <div className="gold-price-meta">
-            started {summary.portfolio.startingEquity.toFixed(2)} ·{" "}
-            {summary.portfolio.position
-              ? `${summary.portfolio.position.side} ${summary.portfolio.position.size.toFixed(3)} oz @ ${summary.portfolio.position.entryPrice.toFixed(2)}`
-              : "flat"}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+const POLL_MS = 20000;
 
 export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [env, setEnv] = useState<HistoryResponse["env"] | null>(null);
   const [goldSummary, setGoldSummary] = useState<GoldDeskSummary | null>(null);
-  const [activeDivision, setActiveDivision] = useState("trading");
+  const [quotes, setQuotes] = useState<InstrumentQuote[]>([]);
+  const [brokerAccount, setBrokerAccount] = useState<BrokerAccountResponse | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -219,10 +83,27 @@ export default function Page() {
   const loadGoldStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/gold-status", { cache: "no-store" });
-      if (!res.ok) return;
-      setGoldSummary(await res.json());
+      if (res.ok) setGoldSummary(await res.json());
     } catch {
-      // Live-data panel failing quietly is fine — it just keeps showing the last good read.
+      /* keep showing last good read */
+    }
+  }, []);
+
+  const loadQuotes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/market-quotes", { cache: "no-store" });
+      if (res.ok) setQuotes((await res.json()).quotes ?? []);
+    } catch {
+      /* keep showing last good read */
+    }
+  }, []);
+
+  const loadBrokerAccount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/broker-account", { cache: "no-store" });
+      if (res.ok) setBrokerAccount(await res.json());
+    } catch {
+      /* keep showing last good read */
     }
   }, []);
 
@@ -232,9 +113,15 @@ export default function Page() {
 
   useEffect(() => {
     loadGoldStatus();
-    const interval = setInterval(loadGoldStatus, GOLD_STATUS_POLL_MS);
-    return () => clearInterval(interval);
-  }, [loadGoldStatus]);
+    loadQuotes();
+    loadBrokerAccount();
+    const id = setInterval(() => {
+      loadGoldStatus();
+      loadQuotes();
+      loadBrokerAccount();
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, [loadGoldStatus, loadQuotes, loadBrokerAccount]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -281,93 +168,84 @@ export default function Page() {
     }
   };
 
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  const greeting = lastAssistant ? lastAssistant.content.slice(0, 90) + (lastAssistant.content.length > 90 ? "…" : "") : "Type below to talk to Aurum — voice arrives once this dashboard is live.";
+
   return (
-    <div className="app-shell">
-      <div className="topbar">
-        <div className="topbar-brand">
-          <span className="topbar-mark" />
-          <div>
-            <div className="topbar-name">AURUM</div>
-            <div className="topbar-tag">SUJAN COMMAND CENTER</div>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <TopHeader />
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        <div className="mx-auto grid max-w-[1500px] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)_minmax(0,340px)]">
+          <div className="flex flex-col gap-4">
+            <LiveMarketsPanel quotes={quotes} />
+            <MarketSentimentPanel judge={goldSummary?.judge ?? null} updatedAt={goldSummary?.ranAt ?? null} />
           </div>
-        </div>
-        <div className="topbar-status">
-          <span className="system-ready">
-            <span className="pulse-dot" />
-            SYSTEM READY
-          </span>
-          {env && !env.hasAnthropicKey && <Pill label="No Anthropic key" tone="critical" />}
-          {env && !env.hasGoldDeskUrl && <Pill label="Gold desk not connected" tone="warn" />}
-          {env && !env.persistentStore && <Pill label="No persistent memory" tone="warn" />}
-          {env && env.hasGoldDeskUrl && <Pill label="Gold desk connected" tone="good" />}
+
+          <div className="flex flex-col items-center">
+            <AurumCore thinking={sending} systemStatus="OPTIMAL" agents={AGENTS} />
+            <div className="mt-2 w-full max-w-md">
+              <VoiceCommandBar active={sending} greeting={greeting} />
+            </div>
+
+            <div className="mt-3 flex w-full max-w-lg flex-col gap-2">
+              {messages.length > 0 || error ? (
+                <div ref={scrollRef} className="max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)]/50 p-3">
+                  {messages.slice(-6).map((m) => (
+                    <div key={m.id} className={`mb-2 text-[13px] leading-snug last:mb-0 ${m.role === "user" ? "text-[var(--color-blue-200)]" : "text-[var(--color-ink-300)]"}`}>
+                      <span className="mr-1.5 font-mono text-[10px] tracking-wide text-[var(--color-ink-500)]">
+                        {m.role === "user" ? "YOU" : "AURUM"}
+                      </span>
+                      {m.content}
+                    </div>
+                  ))}
+                  {error && <div className="text-[12px] text-[var(--color-bear)]">Couldn&rsquo;t send that: {error}</div>}
+                </div>
+              ) : null}
+
+              <div className="flex gap-2">
+                <textarea
+                  ref={composerRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder="Ask Aurum anything…"
+                  rows={1}
+                  className="flex-1 resize-none rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-2.5 text-sm text-[var(--color-ink-100)] placeholder:text-[var(--color-ink-500)] focus:border-[var(--color-border-gold)] focus:outline-none"
+                />
+                <button
+                  onClick={send}
+                  disabled={sending || !input.trim()}
+                  className="flex-shrink-0 rounded-lg bg-gradient-to-br from-[var(--color-gold-300)] to-[var(--color-gold-400)] px-5 text-sm font-semibold text-[#1a1206] transition-opacity disabled:opacity-40"
+                >
+                  Send
+                </button>
+              </div>
+
+              {env && (!env.hasAnthropicKey || !env.hasGoldDeskUrl || !env.persistentStore) && (
+                <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+                  {!env.hasAnthropicKey && <span className="tag-demo">No Anthropic key</span>}
+                  {!env.hasGoldDeskUrl && <span className="tag-demo">Gold desk not connected</span>}
+                  {!env.persistentStore && <span className="tag-demo">No persistent memory</span>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <LiveTradingPanel gold={goldSummary?.gold ?? null} />
+            <AIInsightsPanel judge={goldSummary?.judge ?? null} connected={goldSummary?.connected ?? false} />
+          </div>
         </div>
       </div>
 
-      <div className="main-grid">
-        <AgentRail active={activeDivision} onSelect={setActiveDivision} />
-
-        {activeDivision === "trading" ? (
-          <TradingPanels summary={goldSummary} />
-        ) : (
-          <div className="trading-col">
-            <div className="division-heading">
-              {DIVISIONS.find((d) => d.id === activeDivision)?.label.toUpperCase()}
-            </div>
-            <div className="panel">
-              <div className="panel-empty">This division isn&rsquo;t built yet — check back once it&rsquo;s wired up.</div>
-            </div>
-          </div>
-        )}
-
-        <div className="center-col">
-          <div className="core-wrap">
-            <div className={`aurum-core ${sending ? "core-thinking" : ""}`}>
-              <span className="core-ring" />
-              <span className="core-ring core-ring-2" />
-              <span className="core-ring core-ring-3" />
-              <span className="core-spire" />
-              <span className="core-glow" />
-            </div>
-          </div>
-
-          <div className="messages" ref={scrollRef}>
-            {messages.length === 0 && !error && (
-              <div className="empty-state">
-                Talk to Aurum. Ask what it can do, check in on the gold desk, or just say hello — it
-                remembers what matters across conversations.
-              </div>
-            )}
-            {messages.map((m) => (
-              <div key={m.id} className={`msg ${m.role === "user" ? "msg-user" : "msg-aurum"}`}>
-                {m.role === "assistant" && <div className="msg-meta">AURUM</div>}
-                {m.content}
-              </div>
-            ))}
-            {sending && (
-              <div className="msg msg-aurum">
-                <div className="msg-meta">AURUM</div>
-                <span className="typing">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </div>
-            )}
-            {error && <div className="msg-error">Couldn&rsquo;t send that: {error}</div>}
-          </div>
-
-          <div className="composer">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="Message Aurum…"
-              rows={1}
-            />
-            <button className="send-btn" onClick={send} disabled={sending || !input.trim()}>
-              Send
-            </button>
-          </div>
+      <div className="px-4 pb-4 sm:px-6">
+        <div className="mx-auto max-w-[1500px]">
+          <StatsBar
+            account={brokerAccount?.account ?? null}
+            positionCount={brokerAccount?.positions.length ?? 0}
+            onAskAurum={() => composerRef.current?.focus()}
+          />
         </div>
       </div>
     </div>
