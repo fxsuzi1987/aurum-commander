@@ -51,6 +51,12 @@
   --animate-ring-spin-slower: ringSpin 90s linear infinite reverse;
   --animate-pulse-dot: pulseDot 2.2s ease-in-out infinite;
   --animate-wave: waveBar 1.4s ease-in-out infinite;
+  --animate-orbit-slow: orbit 14s linear infinite;
+  --animate-orbit-slower: orbit 19s linear infinite reverse;
+  --animate-wire-flow: wireFlow 2.6s linear infinite;
+  --animate-grid-drift: gridDrift 40s linear infinite;
+  --animate-menu-in: menuIn 0.22s ease-out;
+  --animate-fade-in: fadeIn 0.18s ease-out;
 
   @keyframes coreBreathe {
     0%, 100% { opacity: 0.7; transform: scale(0.92); }
@@ -71,6 +77,26 @@
   @keyframes waveBar {
     0%, 100% { transform: scaleY(0.3); }
     50% { transform: scaleY(1); }
+  }
+  @keyframes orbit {
+    from { transform: rotate(0deg) translateX(var(--orbit-radius, 40px)) rotate(0deg); }
+    to { transform: rotate(360deg) translateX(var(--orbit-radius, 40px)) rotate(-360deg); }
+  }
+  @keyframes wireFlow {
+    0% { stroke-dashoffset: 24; }
+    100% { stroke-dashoffset: 0; }
+  }
+  @keyframes gridDrift {
+    from { background-position: 0 0; }
+    to { background-position: 64px 64px; }
+  }
+  @keyframes menuIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 }
 
@@ -94,6 +120,29 @@ body {
     radial-gradient(ellipse 900px 700px at 12% 30%, rgb(90 180 234 / 0.05), transparent 55%),
     radial-gradient(ellipse 900px 700px at 88% 30%, rgb(90 180 234 / 0.05), transparent 55%),
     var(--color-void);
+  position: relative;
+}
+
+/* Faint drifting circuit-grid texture behind the whole dashboard — pure
+   CSS, no image assets. Kept low-opacity so it reads as atmosphere, not
+   noise, and respects prefers-reduced-motion below. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(90 180 234 / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(90 180 234 / 0.05) 1px, transparent 1px);
+  background-size: 64px 64px;
+  animation: var(--animate-grid-drift);
+  mask-image: radial-gradient(ellipse 1400px 900px at 50% 0%, black, transparent 75%);
+}
+
+#__next, body > div {
+  position: relative;
+  z-index: 1;
 }
 
 button {
@@ -143,6 +192,23 @@ button {
     color: var(--color-warn);
     border-color: rgb(234 182 84 / 0.28);
     background: rgb(234 182 84 / 0.06);
+  }
+
+  .icon-btn {
+    @apply flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border text-[var(--color-ink-300)] transition-colors;
+    border-color: var(--color-border);
+  }
+  .icon-btn:hover {
+    border-color: var(--color-border-gold);
+    color: var(--color-gold-300);
+  }
+
+  .dropdown-panel {
+    @apply absolute z-30 overflow-hidden rounded-2xl border p-2 shadow-2xl;
+    background: linear-gradient(180deg, rgb(16 20 31 / 0.96), rgb(10 13 20 / 0.96));
+    border-color: var(--color-border);
+    backdrop-filter: blur(10px);
+    animation: var(--animate-fade-in);
   }
 }
 
