@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadHistory, usingPersistentStore } from "@/lib/store";
 import { hasAnthropicKey } from "@/lib/llm";
-import { hasGoldDeskUrl } from "@/lib/specialists";
+import { hasGoldDeskUrl, hasRealTradeSetupData } from "@/lib/specialists";
 import { HISTORY_WINDOW } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,8 @@ export async function GET() {
       hasAnthropicKey: hasAnthropicKey(),
       hasGoldDeskUrl: hasGoldDeskUrl(),
       persistentStore: persistent,
+      hasRealMarketData: hasRealTradeSetupData(),
+      webhookConfigured: Boolean(process.env.TRADINGVIEW_WEBHOOK_SECRET),
     },
   });
 }
