@@ -12,8 +12,8 @@ const manrope = Manrope({ subsets: ["latin"], weight: ["400", "500", "600", "700
 const plexMono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Aurum Commander",
-  description: "Sujan's personal AI command center — one front door, many specialists.",
+  title: "Aurum",
+  description: "Sujan's AI trading operating system — live gold desk, demo markets, one command center.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
